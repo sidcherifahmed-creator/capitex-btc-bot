@@ -1,6 +1,6 @@
 requests
 pandas
-pandas-ta
+ta
 python-telegram-bot==20.7
 schedule
 python-dotenv
