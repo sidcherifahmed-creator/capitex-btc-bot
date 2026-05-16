@@ -22,7 +22,7 @@ def get_btc_data():
     url = "https://api.twelvedata.com/time_series"
     params = {
         "symbol": "BTC/USD",
-        "interval": "1h",
+        "interval": "5min",
         "outputsize": 100,
         "apikey": TWELVE_API_KEY
     }
@@ -42,7 +42,8 @@ def analyze(df):
     macd = ta.trend.MACD(df["close"])
     df["macd"] = macd.macd()
     df["macd_signal"] = macd.macd_signal()
-    df["ema200"] = ta.trend.EMAIndicator(df["close"], window=200).ema_indicator()
+    df["ema50"] = ta.trend.EMAIndicator(df["close"], window=50).ema_indicator()
+    df["ema20"] = ta.trend.EMAIndicator(df["close"], window=20).ema_indicator()
     return df
 
 def check_signal(df):
@@ -52,18 +53,21 @@ def check_signal(df):
     rsi = last["rsi"]
     macd = last["macd"]
     macd_sig = last["macd_signal"]
-    ema200 = last["ema200"]
+    ema50 = last["ema50"]
+    ema20 = last["ema20"]
 
     buy = (
-        price > ema200 and
-        50 <= rsi <= 70 and
+        price > ema50 and
+        ema20 > ema50 and
+        45 <= rsi <= 65 and
         macd > macd_sig and
         prev["macd"] <= prev["macd_signal"]
     )
 
     sell = (
-        price < ema200 and
-        30 <= rsi <= 50 and
+        price < ema50 and
+        ema20 < ema50 and
+        35 <= rsi <= 55 and
         macd < macd_sig and
         prev["macd"] >= prev["macd_signal"]
     )
@@ -114,10 +118,10 @@ def run():
     else:
         print("لا توجد إشارة الآن")
 
-schedule.every(1).hours.do(run)
-print("🚀 Capitex BTC Bot يعمل...")
+schedule.every(5).minutes.do(run)
+print("🚀 Capitex BTC Bot يعمل على فريم 5 دقائق...")
 run()
 
 while True:
     schedule.run_pending()
-    time.sleep(60)
+    time.sleep(30)
