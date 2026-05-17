@@ -30,6 +30,15 @@ KILL_ZONES = [
 
 last_signal_time = None
 
+# الصفقة المفتوحة حالياً
+active_trade = None
+# active_trade = {
+#   "direction": "BULLISH" | "BEARISH",
+#   "entry": float,
+#   "tp1": float, "tp2": float, "sl": float,
+#   "tp1_hit": bool, "tp2_hit": bool
+# }
+
 
 def send_telegram(message: str):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
@@ -40,6 +49,80 @@ def send_telegram(message: str):
         print("[Telegram] تم الإرسال")
     except Exception as e:
         print(f"[Telegram Error] {e}")
+
+
+def monitor_active_trade():
+    global active_trade
+    if active_trade is None:
+        return
+
+    df = get_data(interval="15min", outputsize=5)
+    if df is None:
+        return
+
+    price = df["close"].iloc[-1]
+    d = active_trade
+    direction = d["direction"]
+
+    if direction == "BULLISH":
+        # TP1
+        if not d["tp1_hit"] and price >= d["tp1"]:
+            d["tp1_hit"] = True
+            pct = abs(d["tp1"] - d["entry"]) / d["entry"] * 100
+            send_telegram(
+                f"<b>🎯 TP1 تم!</b>\n"
+                f"BTC/USD وصل ${price:,.2f}\n"
+                f"ربح: +{pct:.2f}% | انقل SL لنقطة الدخول"
+            )
+        # TP2
+        if not d["tp2_hit"] and price >= d["tp2"]:
+            d["tp2_hit"] = True
+            pct = abs(d["tp2"] - d["entry"]) / d["entry"] * 100
+            send_telegram(
+                f"<b>🏆 TP2 تم! صفقة مغلقة</b>\n"
+                f"BTC/USD وصل ${price:,.2f}\n"
+                f"ربح كامل: +{pct:.2f}%"
+            )
+            active_trade = None
+        # SL
+        elif price <= d["sl"]:
+            pct = abs(d["sl"] - d["entry"]) / d["entry"] * 100
+            send_telegram(
+                f"<b>🛑 Stop Loss</b>\n"
+                f"BTC/USD وصل ${price:,.2f}\n"
+                f"خسارة: -{pct:.2f}% | انتظر الإشارة القادمة"
+            )
+            active_trade = None
+
+    elif direction == "BEARISH":
+        # TP1
+        if not d["tp1_hit"] and price <= d["tp1"]:
+            d["tp1_hit"] = True
+            pct = abs(d["tp1"] - d["entry"]) / d["entry"] * 100
+            send_telegram(
+                f"<b>🎯 TP1 تم!</b>\n"
+                f"BTC/USD وصل ${price:,.2f}\n"
+                f"ربح: +{pct:.2f}% | انقل SL لنقطة الدخول"
+            )
+        # TP2
+        if not d["tp2_hit"] and price <= d["tp2"]:
+            d["tp2_hit"] = True
+            pct = abs(d["tp2"] - d["entry"]) / d["entry"] * 100
+            send_telegram(
+                f"<b>🏆 TP2 تم! صفقة مغلقة</b>\n"
+                f"BTC/USD وصل ${price:,.2f}\n"
+                f"ربح كامل: +{pct:.2f}%"
+            )
+            active_trade = None
+        # SL
+        elif price >= d["sl"]:
+            pct = abs(d["sl"] - d["entry"]) / d["entry"] * 100
+            send_telegram(
+                f"<b>🛑 Stop Loss</b>\n"
+                f"BTC/USD وصل ${price:,.2f}\n"
+                f"خسارة: -{pct:.2f}% | انتظر الإشارة القادمة"
+            )
+            active_trade = None
 
 
 def get_data(interval="15min", outputsize=200) -> Optional[pd.DataFrame]:
@@ -218,46 +301,50 @@ def get_5min_confirmation(direction: str) -> bool:
     return False
 
 
-def build_signal_message(direction: str, entry: float, sl: float,
-                          tp1: float, tp2: float,
+def build_signal_message(direction: str, market_price: float, limit_price: float,
+                          sl: float, tp1: float, tp2: float,
                           ob: Optional[Dict], fvg: Optional[Dict],
                           sweep: bool, rsi_div: bool) -> str:
     emoji_dir = "🟢" if direction == "BULLISH" else "🔴"
     signal_ar = "شراء" if direction == "BULLISH" else "بيع"
-    rr1 = abs(tp1 - entry) / abs(entry - sl)
-    rr2 = abs(tp2 - entry) / abs(entry - sl)
+    rr1 = abs(tp1 - limit_price) / abs(limit_price - sl)
+    rr2 = abs(tp2 - limit_price) / abs(limit_price - sl)
     now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    limit_src = "Order Block" if ob else ("FVG" if fvg else "السعر")
 
     confluence = []
     if sweep:
-        confluence.append("Lightning Liquidity Sweep")
+        confluence.append("⚡ Liquidity Sweep")
     if ob:
-        confluence.append("Order Block")
+        confluence.append("📦 Order Block")
     if fvg:
-        confluence.append("Fair Value Gap")
+        confluence.append("🌀 Fair Value Gap")
     if rsi_div:
-        confluence.append("RSI Divergence")
+        confluence.append("📊 RSI Divergence")
 
     msg = (
-        f"<b>Capitex BTC Signal</b>\n"
+        f"<b>⚡ Capitex BTC Signal</b>\n"
         f"<b>BTC/USD -- {signal_ar} {emoji_dir}</b>\n"
-        f"------------------------\n"
-        f"<b>الدخول:</b> ${entry:,.2f}\n"
-        f"<b>TP1:</b> ${tp1:,.2f}  (RR {rr1:.1f})\n"
-        f"<b>TP2:</b> ${tp2:,.2f}  (RR {rr2:.1f})\n"
-        f"<b>SL:</b>  ${sl:,.2f}\n"
-        f"------------------------\n"
+        f"━━━━━━━━━━━━━━━━━━\n"
+        f"💹 <b>السعر الحالي:</b> ${market_price:,.2f}\n"
+        f"📌 <b>Limit Order:</b> ${limit_price:,.2f}  <i>({limit_src})</i>\n"
+        f"━━━━━━━━━━━━━━━━━━\n"
+        f"🎯 <b>TP1:</b> ${tp1:,.2f}  (RR {rr1:.1f})\n"
+        f"🏆 <b>TP2:</b> ${tp2:,.2f}  (RR {rr2:.1f})\n"
+        f"🛑 <b>SL:</b>  ${sl:,.2f}\n"
+        f"━━━━━━━━━━━━━━━━━━\n"
         f"<b>التقاطع:</b>\n"
-        + "\n".join(f"  + {c}" for c in confluence) + "\n"
-        f"------------------------\n"
-        f"{now}\n"
-        f"<i>لا تخاطر بأكثر من 1-2% لكل صفقة</i>"
+        + "\n".join(f"  {c}" for c in confluence) + "\n"
+        f"━━━━━━━━━━━━━━━━━━\n"
+        f"🕐 {now}\n"
+        f"<i>ضع Limit Order عند ${limit_price:,.2f}</i>"
     )
     return msg
 
 
 def run():
     try:
+        monitor_active_trade()
         _run_logic()
     except Exception as e:
         print(f"[CRASH] {e}")
@@ -273,6 +360,11 @@ def _run_logic():
 
     if not in_kill_zone():
         print("خارج Kill Zone -- انتظار")
+        return
+
+    # لا صفقة جديدة أثناء صفقة مفتوحة
+    if active_trade is not None:
+        print("صفقة مفتوحة -- انتظار الإغلاق")
         return
 
     if last_signal_time:
@@ -337,24 +429,46 @@ def _run_logic():
     if direction == "BULLISH":
         sl_base = ob["low"] if ob else df["low"].iloc[-3:].min()
         sl = sl_base - (current_price * 0.0005)
-        risk = entry - sl
-        tp1 = entry + risk * RISK_REWARD_TP1
-        tp2 = entry + risk * RISK_REWARD_TP2
+        # Limit أفضل: عند OB أو FVG أو 0.1% تحت السعر
+        if ob:
+            limit_price = round(ob["mid"], 2)
+        elif fvg:
+            limit_price = round(fvg["mid"], 2)
+        else:
+            limit_price = round(current_price * 0.999, 2)
+        # أعد حساب risk من Limit لا من السعر الحالي
+        risk = limit_price - sl
+        tp1 = limit_price + risk * RISK_REWARD_TP1
+        tp2 = limit_price + risk * RISK_REWARD_TP2
     else:
         sl_base = ob["high"] if ob else df["high"].iloc[-3:].max()
         sl = sl_base + (current_price * 0.0005)
-        risk = sl - entry
-        tp1 = entry - risk * RISK_REWARD_TP1
-        tp2 = entry - risk * RISK_REWARD_TP2
+        if ob:
+            limit_price = round(ob["mid"], 2)
+        elif fvg:
+            limit_price = round(fvg["mid"], 2)
+        else:
+            limit_price = round(current_price * 1.001, 2)
+        risk = sl - limit_price
+        tp1 = limit_price - risk * RISK_REWARD_TP1
+        tp2 = limit_price - risk * RISK_REWARD_TP2
 
     if risk / entry < 0.0015 and not TEST_MODE:
         print(f"مخاطرة صغيرة جدا ({risk/entry*100:.3f}%) -- رفض")
         return
-    print(f"المخاطرة: {risk/entry*100:.3f}%")
+    print(f"المخاطرة: {risk/limit_price*100:.3f}%")
 
-    msg = build_signal_message(direction, entry, sl, tp1, tp2, ob, fvg, sweep, rsi_div)
+    msg = build_signal_message(direction, current_price, limit_price, sl, tp1, tp2, ob, fvg, sweep, rsi_div)
     send_telegram(msg)
     last_signal_time = datetime.now()
+
+    # تسجيل الصفقة للمراقبة — نتابع من سعر الـ Limit
+    active_trade = {
+        "direction": direction,
+        "entry": limit_price,
+        "tp1": tp1, "tp2": tp2, "sl": sl,
+        "tp1_hit": False, "tp2_hit": False,
+    }
 
     print(f"--- الاشارة ---")
     print(f"الاتجاه : {direction}")
