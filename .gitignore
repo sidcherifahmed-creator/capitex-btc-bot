@@ -1,3 +1,6 @@
 .env
 __pycache__/
 *.pyc
+*.pyo
+active_trades.json
+backtest_results.csv
